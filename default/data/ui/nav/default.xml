@@ -1,0 +1,4 @@
+<nav color="">
+  <view name="overview" default='true'  />
+  <view name="drilldown" />
+</nav>

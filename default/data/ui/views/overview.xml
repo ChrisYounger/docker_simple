@@ -1,0 +1,237 @@
+<form theme="light">
+  <search id="base1">
+    <query>
+`docker_simple_indexes` sourcetype=docker:ps OR sourcetype=docker:stats 
+| eval created = strptime(created_at, "%Y-%m-%d %H:%M:%S %:z") 
+| eval _time = coalesce(created,now()) 
+| reltime 
+| eval icon = "icon|" + case(sourcetype="docker:stats",null(),status_short=="Up","ico_good ico_small|icon-check|Up", true(), "ico_error ico_small|icon-close|Down") 
+| stats latest(names) as names latest(command) as command earliest(reltime) as created latest(icon) as " " latest(status) as status avg(cpu_perc) as cpu_perc avg(mem_perc) as mem_perc latest(status_short) as status_short by host container_id
+    </query>
+    <earliest>-15m</earliest>
+    <latest>now</latest>
+    <sampleRatio>1</sampleRatio>
+    <done>
+      <condition>
+        <set token="subsearch_sid">$job.sid$</set>
+      </condition>
+    </done>
+  </search>
+  <search id="base2">
+    <query>
+`docker_simple_indexes` sourcetype=docker:stats  host IN ($host$) 
+| join container_id [| loadjob $subsearch_sid$ | fields names container_id]
+| eval name = coalesce(names, container_id)
+| search names IN ($name$) 
+| timechart limit=30 eval(round(avg(cpu_perc),0)) as cpu_perc eval(round(avg(mem_perc),0)) as mem_perc by name
+    </query>
+    <earliest>-24h</earliest>
+    <latest>now</latest>
+    <sampleRatio>1</sampleRatio>
+  </search>
+  <label>Container Overview</label>
+  <fieldset submitButton="false">
+    <input type="multiselect" token="host" searchWhenChanged="true">
+      <label>Host</label>
+      <search base="base1">
+        <query>|dedup host</query>
+      </search>
+      <choice value="*">All</choice>
+      <delimiter>, </delimiter>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <default>*</default>
+      <valuePrefix>"</valuePrefix>
+      <valueSuffix>"</valueSuffix>
+    </input>
+    <input type="multiselect" token="name" searchWhenChanged="true">
+      <label>Name</label>
+      <search base="base1">
+        <query>|dedup names</query>
+      </search>
+      <choice value="*">All</choice>
+      <delimiter>, </delimiter>
+      <fieldForLabel>names</fieldForLabel>
+      <fieldForValue>names</fieldForValue>
+      <default>*</default>
+      <valuePrefix>"</valuePrefix>
+      <valueSuffix>"</valueSuffix>
+    </input>
+    <input type="radio" token="status" searchWhenChanged="true">
+      <label>State</label>
+      <choice value="*">All</choice>
+      <choice value="status_short=Up">Up only</choice>
+      <prefix>  </prefix>
+      <default>status_short=Up</default>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <title>CPU Utilization (%)</title>
+      <chart>
+        <title>Past 24 hours (100% = one core)</title>
+        <search base="base2">
+          <query>| fields _time cpu_perc* |  rename cpu_perc:* as *</query>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.text">%</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">connect</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">seriesCompare</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Memory Utilization (%)</title>
+      <chart>
+        <title>Past 24 hours</title>
+        <search base="base2">
+          <query>| fields _time mem_perc* |  rename mem_perc:* as *</query>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.text">%</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.maximumNumber">100</option>
+        <option name="charting.axisY.minimumNumber">0</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">connect</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">seriesCompare</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+  </row>
+  <row>
+    <panel depends="$always_hide$">
+      <html>
+        <style>
+        #containers { width: 80% !important; }
+        #pietime { width: 20% !important; }
+      </style>
+      </html>
+    </panel>
+    <panel id="containers">
+      <title>Containers</title>
+      <table>
+        <title>Click for more detail</title>
+        <search base="base1">
+          <query>
+| search host IN ($host$) names IN ($name$) $status$
+| table container_id host names command created " " status cpu_perc mem_perc 
+| rename cpu_perc as "CPU Util" mem_perc as "Mem Util" container_id as ID host as Host names as Name command as Command created as Created status as State</query>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">row</option>
+        <option name="percentagesRow">false</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+        <format type="number" field="CPU Util">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="number" field="Mem Util">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <drilldown>
+          <link target="_self">/app/docker_simple/drilldown?form.ID=$row.ID$</link>
+        </drilldown>
+      </table>
+    </panel>
+    <panel id="pietime">
+      <title>Containers by state</title>
+      <chart>
+        <search base="base1">
+          <query>
+| search host IN ($host$) names IN ($name$)
+|  stats count by status_short</query>
+        </search>
+        <option name="charting.fieldColors">{"Exited":0xd54642,"Up":0x39ba23}</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">visible</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">pie</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">default</option>
+        <option name="charting.chart.style">minimal</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">standard</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+  </row>
+</form>

@@ -1,0 +1,637 @@
+<form theme="light">
+  <search id="base1">
+    <query>
+`docker_simple_indexes` sourcetype=docker:stats container_id=$ID$
+| streamstats window=1 current=f global=f last(netio_sent_bytes) as netio_sent_bytes_prev last(netio_recv_bytes) as netio_recv_bytes_prev last(blockio_read_bytes) as blockio_read_bytes_prev  last(blockio_write_bytes) as blockio_write_bytes_prev 
+| eval netio_sent_bytes    = max(0, netio_sent_bytes_prev - netio_sent_bytes) * -1
+| eval netio_recv_bytes    = max(0, netio_recv_bytes_prev - netio_recv_bytes) 
+| eval blockio_read_bytes  = max(0, blockio_read_bytes_prev - blockio_read_bytes) 
+| eval blockio_write_bytes = max(0, blockio_write_bytes_prev - blockio_write_bytes) 
+| eval blockio_read_bytes  = blockio_read_bytes  /1000000
+| eval blockio_write_bytes = blockio_write_bytes /1000000 
+| eval netio_sent_bytes    = netio_sent_bytes    /1000000
+| eval netio_recv_bytes    = netio_recv_bytes    /1000000
+| timechart bins=800 sum(blockio_read_bytes) as blockio_read sum(blockio_write_bytes) as blockio_write sum(netio_sent_bytes) as netio_sent sum(netio_recv_bytes) as netio_recv avg(cpu_perc) as cpu_perc avg(mem_usage_bytes) as mem_usage_bytes 
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+    <sampleRatio>1</sampleRatio>
+  </search>
+  <search id="base2">
+    <query>
+`docker_simple_indexes` sourcetype=docker:logs* source=*$ID$*
+| eval time = strftime(_time, "%Y-%m-%d %H:%M")
+| table _time time stream log
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+    <sampleRatio>1</sampleRatio>
+  </search>
+  <search id="base3">
+    <query>
+`docker_simple_indexes` sourcetype="docker:ps" container_id=$ID$ 
+| head 1
+| eval size= size_val + " " + size_unit
+| stats latest(status) as status latest(size) as size latest(image) as Image latest(command) as Command latest(ports) as Ports latest(mounts) as Mounts latest(networks) as Network latest(names) as Name 
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+    <sampleRatio>1</sampleRatio>
+  </search>
+  <search id="base4">
+    <query>
+`docker_simple_indexes` sourcetype=docker:top container_id=$ID$
+[ search `docker_simple_indexes` sourcetype=docker:top container_id=$ID$
+| head 1 
+| return timestamp]
+| table user pid ppid c stime tty cpu_time command _time
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+    <sampleRatio>1</sampleRatio>
+  </search>
+  <search id="base5">
+    <query>
+`docker_simple_indexes` sourcetype="docker:inventory" Id=$ID$* | head 1| fields _raw _time
+    </query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+    <sampleRatio>1</sampleRatio>
+  </search>
+  <search id="base6" base="base1">
+    <query>
+| stats sum(blockio_read) as blockio_read_tot sum(blockio_write) as blockio_write_tot sum(netio_sent) as netio_sent_tot sum(netio_recv) as netio_recv_tot 
+| eval blockio_read_tot = tostring(round(blockio_read_tot,0), "commas") + " MB" 
+| eval blockio_write_tot = tostring(round(blockio_write_tot,0), "commas") + " MB" 
+| eval netio_sent_tot = tostring(round(netio_sent_tot * -1,0), "commas") + " MB" 
+| eval netio_recv_tot = tostring(round(netio_recv_tot,0), "commas") + " MB"
+    </query>
+    <done>
+      <condition>
+        <set token="blockio_read_tot">$result.blockio_read_tot$</set>
+        <set token="blockio_write_tot">$result.blockio_write_tot$</set>
+        <set token="netio_sent_tot">$result.netio_sent_tot$</set>
+        <set token="netio_recv_tot">$result.netio_recv_tot$</set>
+      </condition>
+    </done>
+  </search>
+  <search id="base7">
+    <query>`docker_simple_indexes` sourcetype="docker:stats" container_id=$ID$ | eval mem_limit = mem_limit_val + " " + mem_limit_unit | table pid_count mem_limit</query>
+    <earliest>$time.earliest$</earliest>
+    <latest>$time.latest$</latest>
+    <sampleRatio>1</sampleRatio>
+    <done>
+      <condition>
+        <set token="pid_count">$result.pid_count$</set>
+        <set token="mem_limit">$result.mem_limit$</set>
+      </condition>
+    </done>
+  </search>
+  <label>Container Detail</label>
+  <fieldset submitButton="false">
+    <input type="dropdown" token="ID" searchWhenChanged="true">
+      <label>Container</label>
+      <search>
+        <query>
+`docker_simple_indexes` sourcetype=docker:ps
+|  dedup names container_id
+        </query>
+      </search>
+      <fieldForLabel>names</fieldForLabel>
+      <fieldForValue>container_id</fieldForValue>
+    </input>
+    <input type="time" token="time" searchWhenChanged="true">
+      <label>Time</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <input type="link" token="unused" id="docker_simple_pillnavs">
+        <label></label>
+        <choice value="stats">Overview</choice>
+        <choice value="process">Running processes</choice>
+        <choice value="logs">Logs</choice>
+        <choice value="events">Events</choice>
+        <choice value="inventory">Inventory</choice>
+        <change>
+          <condition value="stats">
+            <set token="showstats">true</set>
+            <unset token="showprocess"></unset>
+            <unset token="showlogs"></unset>
+            <unset token="showinventory"></unset>
+            <unset token="showevents"></unset>
+          </condition>
+          <condition value="process">
+            <set token="showprocess">true</set>
+            <unset token="showstats"></unset>
+            <unset token="showlogs"></unset>
+            <unset token="showinventory"></unset>
+            <unset token="showevents"></unset>
+          </condition>
+          <condition value="logs">
+            <set token="showlogs">true</set>
+            <unset token="showprocess"></unset>
+            <unset token="showstats"></unset>
+            <unset token="showinventory"></unset>
+            <unset token="showevents"></unset>
+          </condition>
+          <condition value="inventory">
+            <set token="showinventory">true</set>
+            <unset token="showprocess"></unset>
+            <unset token="showstats"></unset>
+            <unset token="showlogs"></unset>
+            <unset token="showevents"></unset>
+          </condition>
+          <condition value="events">
+            <set token="showevents">true</set>
+            <unset token="showinventory"></unset>
+            <unset token="showprocess"></unset>
+            <unset token="showstats"></unset>
+            <unset token="showlogs"></unset>
+          </condition>
+        </change>
+        <default>stats</default>
+      </input>
+    </panel>
+    <panel depends="$never_match$">
+      <html>
+        Some inline CSS styles are in this panel.
+        <style>#docker_simple_pillnavs {width: 500px !important}</style>
+      </html>
+    </panel>
+  </row>
+  <row depends="$showstats$">
+    <panel>
+      <title>Latest Status</title>
+      <single>
+        <search base="base3">
+          <query>|fields status</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="colorMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="rangeColors">["0x53a051","0x0877a6","0xf8be34","0xf1813f","0xdc4e41"]</option>
+        <option name="rangeValues">[0,30,70,100]</option>
+        <option name="showSparkline">1</option>
+        <option name="showTrendIndicator">1</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+        <option name="trendColorInterpretation">standard</option>
+        <option name="trendDisplayMode">absolute</option>
+        <option name="unitPosition">after</option>
+        <option name="useColors">1</option>
+        <option name="useThousandSeparators">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Size on disk</title>
+      <single>
+        <search base="base3">
+          <query>|fields size</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="colorMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="rangeColors">["0x53a051","0x0877a6","0xf8be34","0xf1813f","0xdc4e41"]</option>
+        <option name="rangeValues">[0,30,70,100]</option>
+        <option name="showSparkline">1</option>
+        <option name="showTrendIndicator">1</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+        <option name="trendColorInterpretation">standard</option>
+        <option name="trendDisplayMode">absolute</option>
+        <option name="unitPosition">after</option>
+        <option name="useColors">1</option>
+        <option name="useThousandSeparators">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Running processes</title>
+      <single>
+        <search base="base4">
+          <query>|stats count</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="colorMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="rangeColors">["0x53a051","0x0877a6","0xf8be34","0xf1813f","0xdc4e41"]</option>
+        <option name="rangeValues">[0,30,70,100]</option>
+        <option name="showSparkline">1</option>
+        <option name="showTrendIndicator">1</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+        <option name="trendColorInterpretation">standard</option>
+        <option name="trendDisplayMode">absolute</option>
+        <option name="underLabel">PID (thread) count: $pid_count$</option>
+        <option name="unitPosition">after</option>
+        <option name="useColors">0</option>
+        <option name="useThousandSeparators">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Container Summary</title>
+      <table>
+        <search base="base3">
+          <query>| fields - status size
+| transpose header_field=Name 0 
+| rename column as " "</query>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="percentagesRow">false</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$showstats$">
+    <panel>
+      <title>CPU Utilization (%)</title>
+      <chart>
+        <title>(100% = one core)</title>
+        <search base="base1">
+          <query>| fields _time cpu_perc |  rename cpu_perc as "CPU %"</query>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">connect</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">standard</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Memory Bytes Used (MB)</title>
+      <chart>
+        <title>Memory limit: $mem_limit$</title>
+        <search base="base1">
+          <query>| fields _time mem_usage_bytes 
+| eval mem_usage_bytes = mem_usage_bytes/1000000 |  rename mem_usage_bytes as "Memory MegaBytes"</query>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">connect</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">standard</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$showstats$">
+    <panel>
+      <title>Block IO (MB)</title>
+      <chart>
+        <title>Total Read: $blockio_read_tot$ / Total Write: $blockio_write_tot$</title>
+        <search base="base1">
+          <query>| fields _time blockio_read blockio_write | rename blockio_read as "Block Read IO" blockio_write as "Block Write IO"</query>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">connect</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">standard</option>
+        <option name="charting.legend.placement">top</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Network IO (MB)</title>
+      <chart>
+        <title>Total Sent: $netio_sent_tot$ / Total Received: $netio_recv_tot$</title>
+        <search base="base1">
+          <query>| fields _time netio_sent netio_recv  |  rename netio_sent as "Network IO Sent" netio_recv as "Network IO Received"</query>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">visible</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">connect</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">standard</option>
+        <option name="charting.legend.placement">top</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$showlogs$">
+    <panel>
+      <chart>
+        <search base="base2">
+          <query>| timechart bins=300 count by stream</query>
+        </search>
+        <option name="charting.axisLabelsX.majorLabelStyle.overflowMode">ellipsisNone</option>
+        <option name="charting.axisLabelsX.majorLabelStyle.rotation">0</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.visibility">collapsed</option>
+        <option name="charting.axisTitleY2.visibility">visible</option>
+        <option name="charting.axisX.abbreviation">none</option>
+        <option name="charting.axisX.scale">linear</option>
+        <option name="charting.axisY.abbreviation">none</option>
+        <option name="charting.axisY.scale">linear</option>
+        <option name="charting.axisY2.abbreviation">none</option>
+        <option name="charting.axisY2.enabled">0</option>
+        <option name="charting.axisY2.scale">inherit</option>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.bubbleMaximumSize">50</option>
+        <option name="charting.chart.bubbleMinimumSize">10</option>
+        <option name="charting.chart.bubbleSizeBy">area</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="charting.chart.showDataLabels">none</option>
+        <option name="charting.chart.sliceCollapsingThreshold">0.01</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.chart.style">shiny</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.fieldColors">{"stdout":"#31a35f","stderr":"#d6563c"}</option>
+        <option name="charting.layout.splitSeries">0</option>
+        <option name="charting.layout.splitSeries.allowIndependentYRanges">0</option>
+        <option name="charting.legend.labelStyle.overflowMode">ellipsisMiddle</option>
+        <option name="charting.legend.mode">standard</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.lineWidth">2</option>
+        <option name="height">186</option>
+        <option name="trellis.enabled">0</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+      </chart>
+    </panel>
+  </row>
+  <row depends="$showlogs$">
+    <panel>
+      <title>Logs</title>
+      <input type="dropdown" token="stream" searchWhenChanged="true">
+        <label>Stream</label>
+        <choice value="">All</choice>
+        <choice value="stream=&quot;stdout&quot; AND">stdout</choice>
+        <choice value="stream=&quot;stderr&quot; AND">stderr</choice>
+        <default></default>
+      </input>
+      <input type="text" token="infilter" searchWhenChanged="true">
+        <label>Inclusion filter (% is wildcard)</label>
+        <default>%</default>
+      </input>
+      <input type="text" token="outfilter" searchWhenChanged="true">
+        <label>Exclusion filter (% is wildcard)</label>
+        <default></default>
+      </input>
+      <table>
+        <search base="base2">
+          <query>|where $stream$  like(log, "$infilter$") AND NOT like(log, "$outfilter$") | fields - _time | rename time as Time stream as Stream log as Message</query>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="percentagesRow">false</option>
+        <option name="refresh.display">progressbar</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$showprocess$">
+    <panel>
+      <title>Running processes</title>
+      <table>
+        <search base="base4">
+          <query>|fields - _time </query>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="percentagesRow">false</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$showprocess$">
+    <panel>
+      <title>Process dependency graph</title>
+      <viz type="network-diagram-viz.network-diagram-viz">
+        <title>Requires "Network Diagram Viz":  https://splunkbase.splunk.com/app/4438/</title>
+        <search base="base4">
+          <query>
+| eval pid_full = pid + ": " + command
+| eventstats list(pid_full) as ppid_full_all
+| eval ppid_match_expr = ppid + ":.+"
+| eval ppid_full = mvindex(ppid_full_all, mvfind(ppid_full_all, ppid_match_expr))
+| eval pid_full_len = len(pid_full)
+| eval ppid_full_len = len(ppid_full)
+| eval value = pid_full
+| eval from = if (pid_full_len&gt;26,substr(pid_full,0,25) + "...", pid_full)
+| eval to = if (ppid_full_len&gt;26,substr(ppid_full,0,25) + "...", ppid_full)
+| table from to value
+| eval type="harddrive"
+| sort from
+          </query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="height">600</option>
+        <option name="network-diagram-viz.network-diagram-viz.clusterBy">none</option>
+        <option name="network-diagram-viz.network-diagram-viz.draggableNodes">true</option>
+        <option name="network-diagram-viz.network-diagram-viz.enablePhysics">true</option>
+        <option name="network-diagram-viz.network-diagram-viz.hierachy">true</option>
+        <option name="network-diagram-viz.network-diagram-viz.hierachyDirection">Right-Left</option>
+        <option name="network-diagram-viz.network-diagram-viz.hierachySortMethod">directed</option>
+        <option name="network-diagram-viz.network-diagram-viz.linkTextLocation">false</option>
+        <option name="network-diagram-viz.network-diagram-viz.smoothEdges">true</option>
+        <option name="network-diagram-viz.network-diagram-viz.tokenNode">nd_node_token</option>
+        <option name="network-diagram-viz.network-diagram-viz.tokenValue">nd_value_token</option>
+      </viz>
+    </panel>
+  </row>
+  <row depends="$showprocess$">
+    <panel>
+      <table>
+        <search base="base4">
+          <query>
+| head 1 
+| eval age = "Process list age: " + tostring(round((now() - _time) / 60, 1)) + "mins" 
+| table age 
+| rename age as " "</query>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="percentagesRow">false</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$showinventory$">
+    <panel>
+      <event>
+        <search base="base5">
+          <query>|spath</query>
+        </search>
+        <option name="count">20</option>
+        <option name="list.drilldown">none</option>
+        <option name="list.wrap">1</option>
+        <option name="maxLines">5</option>
+        <option name="raw.drilldown">none</option>
+        <option name="rowNumbers">0</option>
+        <option name="table.drilldown">none</option>
+        <option name="table.sortDirection">asc</option>
+        <option name="table.wrap">1</option>
+        <option name="type">list</option>
+      </event>
+    </panel>
+  </row>
+  <row depends="$showinventory$">
+    <panel>
+      <table>
+        <search base="base5">
+          <query>
+| eval age = "Inventory age: " + tostring(round((now() - _time) / 60 / 24, 1)) + "hrs" 
+| table age 
+| rename age as " "</query>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="percentagesRow">false</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+  <row depends="$showevents$">
+    <panel>
+      <table>
+        <search>
+          <query>
+`docker_simple_indexes` sourcetype="docker:events" $ID$*
+| eval time = strftime(_time, "%Y-%m-%d %H:%M") 
+| table _time type event object extra_detail
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+          <sampleRatio>1</sampleRatio>
+        </search>
+        <option name="count">20</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="percentagesRow">false</option>
+        <option name="rowNumbers">false</option>
+        <option name="totalsRow">false</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+</form>
